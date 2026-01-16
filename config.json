@@ -1,0 +1,1 @@
+{"scan_paths": ["C:\\Users\\emilio\\Downloads"], "min_file_size_mb": 1, "max_file_age_days": 30, "database_path": "data/cleaner.db", "log_level": "INFO", "duplicate_threshold_kb": 1024}
