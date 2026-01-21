@@ -94,20 +94,36 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_quick_hash ON files(quick_hash)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_full_hash ON files(full_hash)")
         
+        # Índices adicionales para mejor rendimiento
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_category ON files(category)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_modified ON files(modified_time)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_name ON files(name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_hash_size ON files(quick_hash, size)")
+        
         conn.commit()
     
     def get_connection(self) -> sqlite3.Connection:
         """Obtiene conexión a BD"""
         if self.connection is None:
-            self.connection = sqlite3.connect(str(self.db_path))
+            self.connection = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self.connection.row_factory = sqlite3.Row
+            # Optimizar configuración SQLite para mejor rendimiento
+            self.connection.execute("PRAGMA journal_mode=WAL")
+            self.connection.execute("PRAGMA synchronous=NORMAL")
+            self.connection.execute("PRAGMA cache_size=10000")
+            self.connection.execute("PRAGMA temp_store=MEMORY")
         return self.connection
     
     def close(self):
-        """Cierra conexión"""
+        """Cierra conexión de forma segura"""
         if self.connection:
-            self.connection.close()
-            self.connection = None
+            try:
+                self.connection.execute("PRAGMA optimize")
+                self.connection.close()
+            except Exception:
+                pass
+            finally:
+                self.connection = None
     
     def insert_file(self, file_info: FileInfo) -> int:
         """Inserta un archivo en la BD"""
@@ -226,19 +242,49 @@ class Database:
         
         return [self._row_to_fileinfo(row) for row in rows]
     
-    def get_all_files(self, exclude_dirs: bool = True) -> List[FileInfo]:
-        """Obtiene todos los archivos"""
+    def get_all_files(self, exclude_dirs: bool = True, limit: int = None, offset: int = 0) -> List[FileInfo]:
+        """
+        Obtiene archivos con paginación opcional para mejor rendimiento.
+        
+        Args:
+            exclude_dirs: Excluir directorios
+            limit: Número máximo de resultados (None = sin límite)
+            offset: Offset para paginación
+            
+        Returns:
+            Lista de FileInfo
+        """
         conn = self.get_connection()
         cursor = conn.cursor()
         
         query = "SELECT * FROM files"
+        params = []
+        
+        if exclude_dirs:
+            query += " WHERE NOT is_directory"
+        
+        query += " ORDER BY size DESC"
+        
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        
+        return [self._row_to_fileinfo(row) for row in rows]
+    
+    def get_file_count(self, exclude_dirs: bool = True) -> int:
+        """Obtiene conteo total de archivos para paginación"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        query = "SELECT COUNT(*) FROM files"
         if exclude_dirs:
             query += " WHERE NOT is_directory"
         
         cursor.execute(query)
-        rows = cursor.fetchall()
-        
-        return [self._row_to_fileinfo(row) for row in rows]
+        return cursor.fetchone()[0]
     
     def clear_scan(self):
         """Limpia escaneo previo"""

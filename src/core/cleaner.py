@@ -1,13 +1,22 @@
 """
 Cleanup Engine: Handles safe file cleanup operations
+Provides multiple action modes: dry-run, quarantine, recycle bin, permanent delete
 """
 
 import os
 import shutil
+import re
 from pathlib import Path
 from typing import List, Callable, Optional
 from datetime import datetime
 import uuid
+
+# Try to import send2trash, fallback gracefully if not available
+try:
+    import send2trash
+    HAS_SEND2TRASH = True
+except ImportError:
+    HAS_SEND2TRASH = False
 
 from db.models import CleanupCandidate, CleanupAction, FileInfo
 from db.database import Database
@@ -15,15 +24,64 @@ from utils.config import Config
 from utils.logger import ActionLogger, setup_logger
 
 
+# Constants for file operations
+DEFAULT_QUARANTINE_PATH = "data/quarantine"
+MAX_PATH_LENGTH = 260  # Windows MAX_PATH
+
+
 class CleanupEngine:
-    """Safe cleanup engine with confirmation workflow"""
+    """
+    Safe cleanup engine with confirmation workflow.
+    Supports dry-run, quarantine, recycle bin, and permanent delete operations.
+    """
     
     def __init__(self, db: Database = None, config: Config = None):
         self.db = db or Database()
         self.config = config or Config()
         self.logger = setup_logger("Cleaner", "logs/cleaner.log")
         self.action_logger = ActionLogger("logs/actions.log")
-        self.quarantine_path = Path(self.config.get('quarantine_path'))
+        
+        # Safely get quarantine path with fallback
+        quarantine_config = self.config.get('quarantine_path', DEFAULT_QUARANTINE_PATH)
+        if quarantine_config:
+            self.quarantine_path = Path(quarantine_config)
+        else:
+            self.quarantine_path = Path(DEFAULT_QUARANTINE_PATH)
+        
+        # Ensure quarantine directory exists
+        self.quarantine_path.mkdir(parents=True, exist_ok=True)
+    
+    def _validate_path(self, path: str) -> bool:
+        """
+        Validates a file path for security (prevents path traversal attacks)
+        
+        Args:
+            path: Path string to validate
+            
+        Returns:
+            True if path is safe, False otherwise
+        """
+        if not path:
+            return False
+        
+        try:
+            # Normalize and resolve path
+            resolved = Path(path).resolve()
+            
+            # Check for path traversal attempts
+            if '..' in str(path):
+                self.logger.warning(f"Path traversal attempt detected: {path}")
+                return False
+            
+            # Check path length (Windows limit)
+            if len(str(resolved)) > MAX_PATH_LENGTH:
+                self.logger.warning(f"Path too long: {path}")
+                return False
+            
+            return True
+        except Exception as e:
+            self.logger.error(f"Path validation error: {e}")
+            return False
     
     def create_cleanup_plan(
         self,
@@ -231,7 +289,12 @@ class CleanupEngine:
         return results
     
     def _move_file(self, action: CleanupAction, file_path: Path):
-        """Moves file to destination"""
+        """Moves file to destination with path validation"""
+        if not self._validate_path(str(file_path)):
+            raise ValueError(f"Invalid source path: {file_path}")
+        if not self._validate_path(action.target_path):
+            raise ValueError(f"Invalid target path: {action.target_path}")
+            
         target = Path(action.target_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         
@@ -239,21 +302,30 @@ class CleanupEngine:
         self.logger.info(f"Moved: {file_path} -> {target}")
     
     def _delete_file_to_trash(self, action: CleanupAction, file_path: Path):
-        """Sends file to recycle bin"""
-        # Try using send2trash if available
-        try:
-            import send2trash
+        """Sends file to recycle bin using send2trash or fallback to quarantine"""
+        if not self._validate_path(str(file_path)):
+            raise ValueError(f"Invalid path: {file_path}")
+            
+        if HAS_SEND2TRASH:
             send2trash.send2trash(str(file_path))
             self.logger.info(f"Sent to recycle bin: {file_path}")
-        except ImportError:
+        else:
             # Fallback: move to quarantine folder
+            self.logger.warning("send2trash not available, moving to quarantine instead")
             self._move_to_quarantine(action, file_path)
     
     def _move_to_quarantine(self, action: CleanupAction, file_path: Path):
         """Moves file to quarantine preserving folder structure"""
+        if not self._validate_path(str(file_path)):
+            raise ValueError(f"Invalid path: {file_path}")
         
         # Create relative structure in quarantine
-        relative_path = file_path.relative_to(file_path.drive)
+        try:
+            relative_path = file_path.relative_to(file_path.drive)
+        except ValueError:
+            # If relative_to fails, use just the name
+            relative_path = file_path.name
+            
         quarantine_target = self.quarantine_path / relative_path
         
         quarantine_target.parent.mkdir(parents=True, exist_ok=True)

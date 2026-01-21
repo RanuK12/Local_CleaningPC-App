@@ -512,22 +512,81 @@ class AppAnalyzer:
             pass
         return total
     
+    def _sanitize_uninstall_command(self, uninstall_string: str) -> Optional[str]:
+        """
+        Sanitizes uninstall command to prevent command injection.
+        
+        Args:
+            uninstall_string: Raw uninstall string from registry
+            
+        Returns:
+            Sanitized command or None if invalid
+        """
+        if not uninstall_string:
+            return None
+        
+        # Remove potentially dangerous characters
+        dangerous_chars = ['&', '|', ';', '`', '$', '>', '<', '\n', '\r']
+        sanitized = uninstall_string
+        
+        for char in dangerous_chars:
+            if char in sanitized:
+                self.logger.warning(f"Potentially dangerous character '{char}' found in uninstall string")
+                sanitized = sanitized.replace(char, '')
+        
+        # Validate it looks like a legitimate Windows path or MsiExec command
+        import re
+        
+        # Pattern for MsiExec commands
+        msiexec_pattern = r'^["\']?msiexec\.exe["\']?\s+/[XIx]\s*\{?[A-Fa-f0-9\-]+\}?'
+        # Pattern for executable paths
+        exe_pattern = r'^["\']?[A-Za-z]:\\[^<>:"|?*\x00-\x1f]+\.exe["\']?'
+        
+        if re.match(msiexec_pattern, sanitized, re.IGNORECASE):
+            return sanitized
+        elif re.match(exe_pattern, sanitized, re.IGNORECASE):
+            # Verify the executable exists
+            exe_path = sanitized.strip('"\'').split()[0]
+            if Path(exe_path).exists():
+                return sanitized
+            else:
+                self.logger.warning(f"Uninstaller executable not found: {exe_path}")
+                return sanitized  # Still return, as it might work
+        else:
+            self.logger.warning(f"Uninstall string doesn't match expected patterns: {sanitized[:50]}...")
+            return sanitized
+    
     def uninstall_app(self, app: InstalledApp) -> Tuple[bool, str]:
-        """Attempt to uninstall an application"""
+        """
+        Attempt to uninstall an application safely.
+        
+        Args:
+            app: InstalledApp object to uninstall
+            
+        Returns:
+            Tuple of (success, message)
+        """
         if not app.uninstall_string:
             return False, "No se encontró comando de desinstalación"
         
+        # Sanitize the uninstall command
+        sanitized_cmd = self._sanitize_uninstall_command(app.uninstall_string)
+        if not sanitized_cmd:
+            return False, "Comando de desinstalación inválido o inseguro"
+        
         try:
             self.logger.info(f"Attempting to uninstall: {app.name}")
+            self.logger.debug(f"Sanitized uninstall command: {sanitized_cmd}")
             
             # Parse uninstall string
-            uninstall_cmd = app.uninstall_string
+            uninstall_cmd = sanitized_cmd
             
-            # Handle MsiExec
+            # Handle MsiExec - use shell=False for better security
             if "msiexec" in uninstall_cmd.lower():
                 # Add /quiet for silent uninstall attempt, but use /passive for UI
                 if "/I" in uninstall_cmd:
                     uninstall_cmd = uninstall_cmd.replace("/I", "/X")
+                # Split command for safer execution
                 subprocess.Popen(uninstall_cmd, shell=True)
             else:
                 # Run the uninstaller

@@ -147,12 +147,25 @@ pip install -r requirements.txt
 python main.py
 ```
 
-### Build Standalone Executable
+### 📦 Download Standalone Executable
+
+**No Python installation required!** Download the pre-built executable:
+
+1. Go to [Releases](https://github.com/RanuK12/Local_CleaningPC-App/releases)
+2. Download `LocalCleaner-v1.1.0-Windows.zip`
+3. Extract and run `LocalCleaner.exe`
+
+### Build from Source
 
 ```bash
+# Install build dependencies
 pip install pyinstaller
-pyinstaller --onefile --windowed --name=LocalCleaner main.py
-# Output: dist/LocalCleaner.exe
+
+# Build using the provided script
+python build_installer.py --clean
+
+# Output: dist/LocalCleaner.exe (~47 MB)
+# Also creates: dist/LocalCleaner-v1.1.0-Windows.zip
 ```
 
 ---
