@@ -309,3 +309,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 <p align="center">
   <strong>Version 1.0.0</strong> • January 2026
 </p>
+
+## Licencia
+
+MIT — © 2026 Ranuk IT Solutions | ranuk.dev
